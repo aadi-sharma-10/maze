@@ -27,11 +27,8 @@ all: build/maze_dataset
 build:
 	mkdir -p build
 
-build/maze_dataset: src/maze_dataset.c $(CORE) | build
-	$(CC) $(CFLAGS) src/maze_dataset.c src/maze_core.c src/maze_generator.c -lm -o $@
-
-build/maze_model_score: src/maze_model_score.c model/maze_model.h | build
-	$(CC) $(CFLAGS) -Imodel src/maze_model_score.c -o $@
+build/maze_dataset: src/maze_dataset.c model/maze_model.h $(CORE) | build
+	$(CC) $(CFLAGS) -Imodel src/maze_dataset.c src/maze_core.c src/maze_generator.c -lm -o $@
 
 build/test_all: tests/test_all.c $(CORE) | build
 	$(CC) $(CFLAGS) tests/test_all.c src/maze_core.c src/maze_generator.c -lm -o $@
@@ -65,8 +62,8 @@ train: dataset
 	$(PYTHON) tools/train_model.py data/maze_data.csv --output model
 	$(MAKE) check-model
 
-check-model: build/maze_model_score
-	$(PYTHON) tools/verify_model.py data/maze_data.csv model/maze_model.json ./build/maze_model_score
+check-model: build/maze_dataset
+	$(PYTHON) tools/train_model.py data/maze_data.csv --output model --check ./build/maze_dataset
 
 test: build/test_all build/maze_dataset
 	./build/test_all

@@ -4,11 +4,17 @@
  *   ./maze_dataset [seed_count] [trials_per_bot] [first_seed] > data.csv
  *       for every seed and difficulty: make a maze, find its features,
  *       run both bots many times and print one CSV line.
+ *
+ *   ./maze_dataset --score
+ *       reads 7 feature numbers per line and prints the model's
+ *       predicted success rate (used to check C matches Python).
  */
 #include "maze.h"
+#include "maze_model.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* reads a whole positive number from text. returns 0 if it is not valid */
 static int read_number(const char *text, unsigned long max, unsigned long *out)
@@ -28,12 +34,36 @@ static int read_number(const char *text, unsigned long max, unsigned long *out)
     return 1;
 }
 
+static int score_mode(void)
+{
+    double features[MODEL_FEATURE_COUNT];
+    int i;
+
+    while (1)
+    {
+        int result = scanf("%lf", &features[0]);
+        if (result == EOF)
+            return 0;
+        if (result != 1)
+            return 1;
+        for (i = 1; i < MODEL_FEATURE_COUNT; i++)
+        {
+            if (scanf("%lf", &features[i]) != 1)
+                return 1;
+        }
+        printf("%.17g\n", predict_success(features));
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned long seed_count = 200;
     unsigned long trials = 64;
     unsigned long first_seed = 1;
     int ok = 1;
+
+    if (argc == 2 && strcmp(argv[1], "--score") == 0)
+        return score_mode();
 
     if (argc > 4)
         ok = 0;
@@ -50,6 +80,7 @@ int main(int argc, char **argv)
     if (!ok)
     {
         fprintf(stderr, "Usage: %s [seed_count=200] [trials_per_bot=64] [first_seed=1]\n", argv[0]);
+        fprintf(stderr, "   or: %s --score\n", argv[0]);
         return 1;
     }
 
