@@ -205,14 +205,14 @@ public:
         SetTargetFPS(60);
         SetRandomSeed(static_cast<unsigned int>(std::time(nullptr)));
 
-        background_ = LoadTexture("assets/image.png");
-        shrub_ = LoadTexture("assets/bush-Photoroom.png");
-        playerTexture_ = LoadTexture("resources/pixel people/astronaut 2.png");
+        background_ = LoadTexture("assets/game_background.png");
+        shrub_ = LoadTexture("assets/bush.png");
+        playerTexture_ = LoadTexture("assets/player.png");
 
-        fruitIcons_[0] = LoadTexture("resources/scrimsy fruit icons/scrimsy fruit icons/kind/apple/red apple.png");
-        fruitIcons_[1] = LoadTexture("resources/scrimsy fruit icons/scrimsy fruit icons/kind/banana/yellow banana.png");
-        fruitIcons_[2] = LoadTexture("resources/scrimsy fruit icons/scrimsy fruit icons/kind/grape/purple grapes.png");
-        fruitIcons_[3] = LoadTexture("resources/scrimsy fruit icons/scrimsy fruit icons/kind/strawberry/red strawberry.png");
+        fruitIcons_[0] = LoadTexture("assets/apple.png");
+        fruitIcons_[1] = LoadTexture("assets/banana.png");
+        fruitIcons_[2] = LoadTexture("assets/grapes.png");
+        fruitIcons_[3] = LoadTexture("assets/strawberry.png");
     }
 
     ~Game()
