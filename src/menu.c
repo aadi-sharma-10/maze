@@ -1,193 +1,179 @@
+/* menu.c - login / sign up screen (raylib + SQLite). Not linked to the game yet. */
 #include "raylib.h"
+#include <sqlite3.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include "sqlite3.h"
 
 #define SCREEN_WIDTH  1280
 #define SCREEN_HEIGHT 720
 #define MAX_LEN 64
-#define USERS_FILE "users.txt"
+#define DB_FILE "maze_game.db"
 
-typedef enum { MODE_SIGNUP, MODE_LOGIN } Mode;
-typedef enum { FIELD_NONE, FIELD_USER, FIELD_PASS } Field;
+/* which text box is selected */
+#define FIELD_NONE 0
+#define FIELD_USER 1
+#define FIELD_PASS 2
 
-
-uint64_t HashPassword(const char *str)
+/* turns the password into a number (FNV-1a hash) so we don't save the real password.
+   note: this is a simple hash, not safe enough for a real app */
+void HashPassword(const char *password, char hex[32])
 {
-    uint64_t hash = 14695981039346656037ULL;
-    for (; *str; str++)
+    unsigned long long hash = 14695981039346656037ULL;
+    int i;
+    for (i = 0; password[i] != '\0'; i++)
     {
-        hash ^= (unsigned char)(*str);
-        hash *= 1099511628211ULL;
+        hash = hash ^ (unsigned char)password[i];
+        hash = hash * 1099511628211ULL;
     }
-    return hash;
+    snprintf(hex, 32, "%016llx", hash);
 }
 
-// Text input box:
-
-void DrawInputBox(Rectangle rect, const char *text, bool active, bool mask)
+/* draws a text box. if hide is true it shows **** instead of the text */
+void DrawInputBox(Rectangle box, const char *text, bool selected, bool hide)
 {
-    DrawRectangleRec(rect, active ? (Color){40,40,60,255} : (Color){30,30,30,255});
-    DrawRectangleLinesEx(rect, 2, active ? SKYBLUE : GRAY);
+    char shown[MAX_LEN + 1];
+    int i;
 
-    char display[MAX_LEN + 1];
-    if (mask)
+    if (selected)
     {
-        int len = (int)strlen(text);
-        for (int i = 0; i < len; i++) display[i] = '*';
-        display[len] = '\0';
+        DrawRectangleRec(box, (Color){40, 40, 60, 255});
+        DrawRectangleLinesEx(box, 2, SKYBLUE);
     }
     else
     {
-        strcpy(display, text);
+        DrawRectangleRec(box, (Color){30, 30, 30, 255});
+        DrawRectangleLinesEx(box, 2, GRAY);
     }
 
-    DrawText(display, rect.x + 10, rect.y + rect.height / 2 - 10, 20, WHITE);
+    strcpy(shown, text);
+    if (hide)
+    {
+        for (i = 0; shown[i] != '\0'; i++)
+            shown[i] = '*';
+    }
+
+    DrawText(shown, box.x + 10, box.y + box.height / 2 - 10, 20, WHITE);
 }
 
-void UpdateTextField(char *buffer)
+/* adds typed letters to the text and handles backspace */
+void UpdateTextField(char *text)
 {
-    int letter = GetCharPressed();
-    int len = (int)strlen(buffer);
+    int len = strlen(text);
+    int key = GetCharPressed();
 
-    while (letter > 0)
+    while (key > 0)
     {
-        if ((letter >= 32) && (letter <= 125) && (len < MAX_LEN - 1))
+        if (key >= 32 && key <= 125 && len < MAX_LEN - 1)
         {
-            buffer[len] = (char)letter;
-            buffer[len + 1] = '\0';
+            text[len] = (char)key;
             len++;
+            text[len] = '\0';
         }
-        letter = GetCharPressed();
+        key = GetCharPressed();
     }
 
     if (IsKeyPressed(KEY_BACKSPACE) && len > 0)
-        buffer[len - 1] = '\0';
+        text[len - 1] = '\0';
 }
 
-
-// Button 
-
-bool DrawButton(Rectangle rect, const char *text, Color base)
+bool DrawButton(Rectangle box, const char *text, Color color)
 {
-    Vector2 mouse = GetMousePosition();
-    bool hover = CheckCollisionPointRec(mouse, rect);
-
-    DrawRectangleRec(rect, hover ? Fade(base, 1.0f) : Fade(base, 0.7f));
-    DrawRectangleLinesEx(rect, 2, WHITE);
-
+    bool hover = CheckCollisionPointRec(GetMousePosition(), box);
     int fontSize = 22;
-    DrawText(text,
-        rect.x + rect.width / 2 - MeasureText(text, fontSize) / 2,
-        rect.y + rect.height / 2 - fontSize / 2,
-        fontSize, WHITE);
+
+    if (hover)
+        DrawRectangleRec(box, color);
+    else
+        DrawRectangleRec(box, Fade(color, 0.7f));
+    DrawRectangleLinesEx(box, 2, WHITE);
+
+    DrawText(text, box.x + box.width / 2 - MeasureText(text, fontSize) / 2,
+             box.y + box.height / 2 - fontSize / 2, fontSize, WHITE);
 
     return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 
-
-// File storage: "username:hashhex" per line
-
-bool UsernameExists(const char *username)
+/* saves a new user. writes the result in message */
+void Signup(const char *username, const char *password, char *message)
 {
-    FILE *f = fopen(USERS_FILE, "r");
-    if (!f) return false;
+    sqlite3 *db;
+    sqlite3_stmt *stmt = NULL;
+    char hash[32];
 
-    char fileUser[MAX_LEN];
-    char fileHash[32];
-    bool found = false;
-
-    while (fscanf(f, "%63[^:]:%31s\n", fileUser, fileHash) == 2)
+    if (strlen(username) == 0 || strlen(password) == 0)
     {
-        if (strcmp(fileUser, username) == 0)
-        {
-            found = true;
-            break;
-        }
-    }
-
-    fclose(f);
-    return found;
-}
-
-bool Signup(const char *username, const char *password, char *message) {
-    if (strlen(username) == 0 || strlen(password) == 0) {
         strcpy(message, "Username/password can't be empty! X");
-        return false;
+        return;
     }
 
-    uint64_t hash = HashPassword(password);
-    char hex[32];
-    sprintf(hex, "%016llx", (unsigned long long)hash);
-
-    sqlite3 *db;
-    sqlite3_stmt *res;
-
-    if (sqlite3_open("maze_game.db", &db) != SQLITE_OK) {
+    if (sqlite3_open(DB_FILE, &db) != SQLITE_OK)
+    {
         strcpy(message, "Database connection failed! X");
-        return false;
+        sqlite3_close(db);
+        return;
     }
 
-    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT);", NULL, NULL, NULL);
+    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS users("
+                     "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                     "username TEXT UNIQUE, password TEXT);", NULL, NULL, NULL);
 
-    const char *sql = "INSERT INTO users (username, password) VALUES (?, ?);";
-    bool success = false;
+    HashPassword(password, hash);
 
-    if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(res, 1, username, -1, SQLITE_STATIC);
-        sqlite3_bind_text(res, 2, hex, -1, SQLITE_STATIC);
-
-        if (sqlite3_step(res) == SQLITE_DONE) {
-            strcpy(message, "Account created! You can log in now.");
-            success = true;
-        } else {
-            strcpy(message, "Username already exists! X");
-        }
-    } else {
+    /* ? are filled in with bind_text, this stops SQL injection */
+    if (sqlite3_prepare_v2(db, "INSERT INTO users (username, password) VALUES (?, ?);",
+                           -1, &stmt, NULL) != SQLITE_OK)
+    {
         strcpy(message, "Database Query Error! X");
     }
+    else
+    {
+        sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, hash, -1, SQLITE_STATIC);
 
-    sqlite3_finalize(res);
+        if (sqlite3_step(stmt) == SQLITE_DONE)
+            strcpy(message, "Account created! You can log in now.");
+        else
+            strcpy(message, "Username already exists! X");
+    }
+
+    sqlite3_finalize(stmt);
     sqlite3_close(db);
-    return success;
 }
 
-bool Login(const char *username, const char *password, char *message) {
-    uint64_t enteredHash = HashPassword(password);
-    char enteredHex[32];
-    sprintf(enteredHex, "%016llx", (unsigned long long)enteredHash);
-
-    bool success = false;
+/* checks username and password. writes the result in message */
+void Login(const char *username, const char *password, char *message)
+{
     sqlite3 *db;
-    sqlite3_stmt *res;
+    sqlite3_stmt *stmt = NULL;
+    char hash[32];
 
-    if (sqlite3_open("maze_game.db", &db) != SQLITE_OK) {
+    if (sqlite3_open(DB_FILE, &db) != SQLITE_OK)
+    {
         strcpy(message, "Database connection failed! X");
-        return false;
+        sqlite3_close(db);
+        return;
     }
 
-    const char *sql = "SELECT * FROM users WHERE username = ? AND password = ?;";
+    HashPassword(password, hash);
 
-    if (sqlite3_prepare_v2(db, sql, -1, &res, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(res, 1, username, -1, SQLITE_STATIC);
-        sqlite3_bind_text(res, 2, enteredHex, -1, SQLITE_STATIC);
-
-        if (sqlite3_step(res) == SQLITE_ROW) {
-            strcpy(message, "Login successful!");
-            success = true;
-        } else {
-            strcpy(message, "Wrong username or password! X");
-        }
-    } else {
+    if (sqlite3_prepare_v2(db, "SELECT * FROM users WHERE username = ? AND password = ?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+    {
         strcpy(message, "Database Query Error! X");
     }
+    else
+    {
+        sqlite3_bind_text(stmt, 1, username, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, hash, -1, SQLITE_STATIC);
 
-    sqlite3_finalize(res);
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+            strcpy(message, "Login successful!");
+        else
+            strcpy(message, "Wrong username or password! X");
+    }
+
+    sqlite3_finalize(stmt);
     sqlite3_close(db);
-
-    return success;
 }
 
 int main(void)
@@ -197,100 +183,96 @@ int main(void)
 
     Texture2D background = LoadTexture("assets/background.png");
 
-    Mode mode = MODE_SIGNUP;
-    Field active = FIELD_NONE;
-
+    bool signupMode = true;    /* false = login mode */
+    int selected = FIELD_NONE;
     char username[MAX_LEN] = "";
     char password[MAX_LEN] = "";
     char message[128] = "";
 
-    Rectangle panel = { SCREEN_WIDTH/2 - 220, SCREEN_HEIGHT/2 - 200, 440, 400 };
-
-    Rectangle signupTab = { panel.x, panel.y, panel.width/2, 50 };
-    Rectangle loginTab  = { panel.x + panel.width/2, panel.y, panel.width/2, 50 };
-
-    Rectangle userBox = { panel.x + 30, panel.y + 100, panel.width - 60, 45 };
-    Rectangle passBox = { panel.x + 30, panel.y + 170, panel.width - 60, 45 };
-
-    Rectangle submitBtn = { panel.x + 30, panel.y + 240, panel.width - 60, 50 };
+    Rectangle panel = {SCREEN_WIDTH / 2 - 220, SCREEN_HEIGHT / 2 - 200, 440, 400};
+    Rectangle signupTab = {panel.x, panel.y, panel.width / 2, 50};
+    Rectangle loginTab = {panel.x + panel.width / 2, panel.y, panel.width / 2, 50};
+    Rectangle userBox = {panel.x + 30, panel.y + 100, panel.width - 60, 45};
+    Rectangle passBox = {panel.x + 30, panel.y + 170, panel.width - 60, 45};
+    Rectangle submitButton = {panel.x + 30, panel.y + 240, panel.width - 60, 50};
+    Color tabColor = {40, 40, 50, 255};
 
     while (!WindowShouldClose())
     {
-
-        // Input handling
-
+        /* ----- input ----- */
         Vector2 mouse = GetMousePosition();
+        bool clicked = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+        if (clicked)
         {
-            if (CheckCollisionPointRec(mouse, userBox)) active = FIELD_USER;
-            else if (CheckCollisionPointRec(mouse, passBox)) active = FIELD_PASS;
-            else active = FIELD_NONE;
+            if (CheckCollisionPointRec(mouse, userBox))
+                selected = FIELD_USER;
+            else if (CheckCollisionPointRec(mouse, passBox))
+                selected = FIELD_PASS;
+            else
+                selected = FIELD_NONE;
+
+            if (CheckCollisionPointRec(mouse, signupTab))
+            {
+                signupMode = true;
+                message[0] = '\0';
+            }
+            if (CheckCollisionPointRec(mouse, loginTab))
+            {
+                signupMode = false;
+                message[0] = '\0';
+            }
         }
 
         if (IsKeyPressed(KEY_TAB))
-            active = (active == FIELD_USER) ? FIELD_PASS : FIELD_USER;
+        {
+            if (selected == FIELD_USER)
+                selected = FIELD_PASS;
+            else
+                selected = FIELD_USER;
+        }
 
-        if (active == FIELD_USER) UpdateTextField(username);
-        else if (active == FIELD_PASS) UpdateTextField(password);
+        if (selected == FIELD_USER)
+            UpdateTextField(username);
+        else if (selected == FIELD_PASS)
+            UpdateTextField(password);
 
-
-        // Draw
-
+        /* ----- draw ----- */
         BeginDrawing();
         ClearBackground(BLACK);
 
-        DrawTexturePro(
-            background,
-            (Rectangle){0, 0, background.width, background.height},
-            (Rectangle){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT},
-            (Vector2){0, 0},
-            0,
-            WHITE
-        );
+        DrawTexturePro(background, (Rectangle){0, 0, background.width, background.height},
+                       (Rectangle){0, 0, SCREEN_WIDTH, SCREEN_HEIGHT}, (Vector2){0, 0}, 0, WHITE);
 
-        DrawRectangleRec(panel, (Color){25,25,35,180});
+        DrawRectangleRec(panel, (Color){25, 25, 35, 180});
         DrawRectangleLinesEx(panel, 2, GRAY);
 
-        // Tabs to switch between Sign Up / Log In
-        DrawRectangleRec(signupTab, mode == MODE_SIGNUP ? SKYBLUE : (Color){40,40,50,255});
-        DrawRectangleRec(loginTab,  mode == MODE_LOGIN  ? SKYBLUE : (Color){40,40,50,255});
+        /* tabs */
+        DrawRectangleRec(signupTab, signupMode ? SKYBLUE : tabColor);
+        DrawRectangleRec(loginTab, signupMode ? tabColor : SKYBLUE);
         DrawText("SIGN UP", signupTab.x + 20, signupTab.y + 15, 20, WHITE);
-        DrawText("LOG IN",  loginTab.x + 30,  loginTab.y + 15,  20, WHITE);
-
-        if (CheckCollisionPointRec(mouse, signupTab) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        {
-            mode = MODE_SIGNUP;
-            message[0] = '\0';
-        }
-        if (CheckCollisionPointRec(mouse, loginTab) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-        {
-            mode = MODE_LOGIN;
-            message[0] = '\0';
-        }
+        DrawText("LOG IN", loginTab.x + 30, loginTab.y + 15, 20, WHITE);
 
         DrawText("Username:", userBox.x, userBox.y - 22, 16, LIGHTGRAY);
-        DrawInputBox(userBox, username, active == FIELD_USER, false);
-
+        DrawInputBox(userBox, username, selected == FIELD_USER, false);
         DrawText("Password:", passBox.x, passBox.y - 22, 16, LIGHTGRAY);
-        DrawInputBox(passBox, password, active == FIELD_PASS, true);
+        DrawInputBox(passBox, password, selected == FIELD_PASS, true);
 
-        const char *btnLabel = (mode == MODE_SIGNUP) ? "CREATE ACCOUNT" : "LOG IN";
-        if (DrawButton(submitBtn, btnLabel, (Color){70,170,255,255}))
+        if (DrawButton(submitButton, signupMode ? "CREATE ACCOUNT" : "LOG IN", (Color){70, 170, 255, 255}))
         {
-            message[0] = '\0';
-            if (mode == MODE_SIGNUP)
+            if (signupMode)
                 Signup(username, password, message);
             else
                 Login(username, password, message);
         }
 
-        if (strlen(message) > 0)
-            DrawText(message, panel.x + 30, submitBtn.y + 70, 18, YELLOW);
+        if (message[0] != '\0')
+            DrawText(message, panel.x + 30, submitButton.y + 70, 18, YELLOW);
 
         EndDrawing();
     }
 
     UnloadTexture(background);
     CloseWindow();
-    return 0;}
+    return 0;
+}

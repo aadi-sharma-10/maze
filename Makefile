@@ -50,8 +50,8 @@ build/maze_game: src/maze_game.cpp build/maze_graph.o build/maze_generator.o $(H
 build/maze_cli: src/maze_generator.c $(HEADERS) | build
 	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) -DMAZE_STANDALONE src/maze_generator.c -o $@
 
-build/menu: src/menu.c vendor/sqlite3.h Makefile | build
-	$(CC) $(CPPFLAGS) -Ivendor $(RAYLIB_CFLAGS) $(CFLAGS) src/menu.c $(RAYLIB_LIBS) -lsqlite3 -o $@
+build/menu: src/menu.c Makefile | build
+	$(CC) $(CPPFLAGS) $(RAYLIB_CFLAGS) $(CFLAGS) src/menu.c $(RAYLIB_LIBS) -lsqlite3 -o $@
 
 game: build/maze_game
 cli: build/maze_cli
