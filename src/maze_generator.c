@@ -1,97 +1,93 @@
-#include "maze_generator.h"
-
+/* maze_generator.c - makes a random maze using DFS (recursive backtracker) */
+#include "maze.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
-#define MAZE_GEN_MAX_ROWS 32
-#define MAZE_GEN_MAX_COLS 32
-#define MAZE_GEN_MAX_CELLS (MAZE_GEN_MAX_ROWS * MAZE_GEN_MAX_COLS)
-
-typedef struct { unsigned int state; } Xorshift32;
-
-static unsigned int xorshift32_next(Xorshift32 *rng)
+/* mix up an array (Fisher-Yates shuffle) */
+static void shuffle(int *arr, int n, uint32_t *rng)
 {
-    unsigned int x = rng->state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    rng->state = x;
-    return x;
-}
-
-static void shuffle(int *arr, int n, Xorshift32 *rng)
-{
-    for (int i = n - 1; i > 0; i--)
+    int i;
+    for (i = n - 1; i > 0; i--)
     {
-        int j = (int)(xorshift32_next(rng) % (unsigned int)(i + 1));
-        int tmp = arr[i];
+        int j = next_random(rng) % (i + 1);
+        int temp = arr[i];
         arr[i] = arr[j];
-        arr[j] = tmp;
+        arr[j] = temp;
     }
 }
 
-void MazeGen_GetParams(MazeDifficulty diff, MazeDifficultyParams *out)
+Level get_level(Difficulty diff)
 {
-    switch (diff)
+    Level level;
+    if (diff == EASY)
     {
-    case MAZE_DIFFICULTY_EASY:
-        out->rows         = 15;
-        out->cols         = 15;
-        out->loop_percent = 15;
-        out->fruit_count  = 5;
-        break;
-    case MAZE_DIFFICULTY_HARD:
-        out->rows         = 31;
-        out->cols         = 31;
-        out->loop_percent = 0;
-        out->fruit_count  = 3;
-        break;
-    case MAZE_DIFFICULTY_MEDIUM:
-    default:
-        out->rows         = 21;
-        out->cols         = 21;
-        out->loop_percent = 5;
-        out->fruit_count  = 4;
-        break;
+        level.rows = 15;
+        level.cols = 15;
+        level.loop_percent = 15;
+        level.fruit_count = 5;
     }
+    else if (diff == HARD)
+    {
+        level.rows = 31;
+        level.cols = 31;
+        level.loop_percent = 0;
+        level.fruit_count = 3;
+    }
+    else   /* MEDIUM */
+    {
+        level.rows = 21;
+        level.cols = 21;
+        level.loop_percent = 5;
+        level.fruit_count = 4;
+    }
+    return level;
 }
 
-int MazeGen_Generate(int *grid, int rows, int cols, int loop_percent,
-                     unsigned int seed)
+/*
+ * The maze has "cells" at odd positions (1,1), (1,3), (3,1) ...
+ * and walls between them. We start at the first cell and keep going to a
+ * random unvisited neighbour, breaking the wall between them. When there is
+ * no unvisited neighbour we go back (pop the stack).
+ */
+int generate_maze(int *grid, int rows, int cols, int loop_percent, unsigned int seed)
 {
-    if (rows < 3 || cols < 3) return 0;
-    if ((rows & 1) == 0 || (cols & 1) == 0) return 0;
-    if (rows > MAZE_GEN_MAX_ROWS || cols > MAZE_GEN_MAX_COLS) return 0;
-    if (loop_percent < 0) loop_percent = 0;
-    if (loop_percent > 100) loop_percent = 100;
+    int dr[4] = {-1, 1, 0, 0};
+    int dc[4] = {0, 0, -1, 1};
+    int visited[MAX_CELLS] = {0};
+    int stack[MAX_CELLS];
+    int top = 0;
+    int i, r, c;
 
-    Xorshift32 rng;
-    rng.state = (seed != 0) ? seed : (unsigned int)time(NULL);
-    if (rng.state == 0) rng.state = 1;
+    /* size must be odd and at least 3 */
+    if (rows < 3 || cols < 3)
+        return 0;
+    if (rows % 2 == 0 || cols % 2 == 0)
+        return 0;
+    if (rows > MAX_ROWS || cols > MAX_COLS)
+        return 0;
+    if (loop_percent < 0)
+        loop_percent = 0;
+    if (loop_percent > 100)
+        loop_percent = 100;
 
-    int total = rows * cols;
+    /* seed 0 means "use the time" */
+    uint32_t rng = seed;
+    if (seed == 0)
+        rng = (uint32_t)time(NULL);
 
-    for (int i = 0; i < total; i++)
+    /* start with all walls */
+    for (i = 0; i < rows * cols; i++)
         grid[i] = 1;
 
     int cell_rows = (rows - 1) / 2;
     int cell_cols = (cols - 1) / 2;
 
-    int visited[MAZE_GEN_MAX_CELLS];
-    memset(visited, 0, sizeof(visited));
-
-    int stack[MAZE_GEN_MAX_CELLS];
-    int top = 0;
-
-    const int dcr[4] = {-1, 1,  0, 0};
-    const int dcc[4] = { 0, 0, -1, 1};
-
-    int start_idx = 0;
-    visited[start_idx] = 1;
+    /* start from cell 0, which is grid position (1,1) */
+    visited[0] = 1;
     grid[1 * cols + 1] = 0;
-    stack[top++] = start_idx;
+    stack[top] = 0;
+    top++;
 
     while (top > 0)
     {
@@ -99,233 +95,160 @@ int MazeGen_Generate(int *grid, int rows, int cols, int loop_percent,
         int cr = cur / cell_cols;
         int cc = cur % cell_cols;
 
-        int dir_order[4] = {0, 1, 2, 3};
-        shuffle(dir_order, 4, &rng);
+        int order[4] = {0, 1, 2, 3};
+        shuffle(order, 4, &rng);
 
-        int found = 0;
-        for (int d = 0; d < 4; d++)
+        int moved = 0;
+        for (i = 0; i < 4; i++)
         {
-            int nd = dir_order[d];
-            int nr = cr + dcr[nd];
-            int nc = cc + dcc[nd];
+            int d = order[i];
+            int nr = cr + dr[d];
+            int nc = cc + dc[d];
             if (nr < 0 || nr >= cell_rows || nc < 0 || nc >= cell_cols)
                 continue;
 
-            int nidx = nr * cell_cols + nc;
-            if (visited[nidx]) continue;
+            int next = nr * cell_cols + nc;
+            if (visited[next] == 1)
+                continue;
 
-            int wall_row = cr * 2 + 1 + dcr[nd];
-            int wall_col = cc * 2 + 1 + dcc[nd];
-            grid[wall_row * cols + wall_col] = 0;
+            /* break the wall between the two cells */
+            int wall_r = cr * 2 + 1 + dr[d];
+            int wall_c = cc * 2 + 1 + dc[d];
+            grid[wall_r * cols + wall_c] = 0;
 
-            int cell_row = nr * 2 + 1;
-            int cell_col = nc * 2 + 1;
-            grid[cell_row * cols + cell_col] = 0;
+            /* open the new cell */
+            grid[(nr * 2 + 1) * cols + (nc * 2 + 1)] = 0;
 
-            visited[nidx] = 1;
-            stack[top++] = nidx;
-            found = 1;
+            visited[next] = 1;
+            stack[top] = next;
+            top++;
+            moved = 1;
             break;
         }
 
-        if (!found)
+        if (moved == 0)   /* dead end, go back */
             top--;
     }
 
+    /* now break some extra walls so the maze has loops */
     if (loop_percent > 0)
     {
-        int candidates[MAZE_GEN_MAX_CELLS];
-        int cand_count = 0;
+        int walls[MAX_CELLS];
+        int wall_count = 0;
 
-        for (int r = 1; r < rows - 1; r++)
+        for (r = 1; r < rows - 1; r++)
         {
-            for (int c = 1; c < cols - 1; c++)
+            for (c = 1; c < cols - 1; c++)
             {
-                if (grid[r * cols + c] != 1) continue;
+                if (grid[r * cols + c] != 1)
+                    continue;
 
-                int r_even = ((r & 1) == 0);
-                int c_even = ((c & 1) == 0);
-
-                if (r_even && !c_even)
+                /* wall with path above and below */
+                if (r % 2 == 0 && c % 2 == 1)
                 {
-                    if (grid[(r - 1) * cols + c] == 0 &&
-                        grid[(r + 1) * cols + c] == 0)
+                    if (grid[(r - 1) * cols + c] == 0 && grid[(r + 1) * cols + c] == 0)
                     {
-                        if (cand_count < MAZE_GEN_MAX_CELLS)
-                            candidates[cand_count++] = r * cols + c;
+                        walls[wall_count] = r * cols + c;
+                        wall_count++;
                     }
                 }
-                else if (!r_even && c_even)
+                /* wall with path left and right */
+                else if (r % 2 == 1 && c % 2 == 0)
                 {
-                    if (grid[r * cols + (c - 1)] == 0 &&
-                        grid[r * cols + (c + 1)] == 0)
+                    if (grid[r * cols + c - 1] == 0 && grid[r * cols + c + 1] == 0)
                     {
-                        if (cand_count < MAZE_GEN_MAX_CELLS)
-                            candidates[cand_count++] = r * cols + c;
+                        walls[wall_count] = r * cols + c;
+                        wall_count++;
                     }
                 }
             }
         }
 
-        shuffle(candidates, cand_count, &rng);
+        shuffle(walls, wall_count, &rng);
 
-        int to_remove = cand_count * loop_percent / 100;
-        for (int i = 0; i < to_remove && i < cand_count; i++)
-            grid[candidates[i]] = 0;
+        int remove = wall_count * loop_percent / 100;
+        for (i = 0; i < remove; i++)
+            grid[walls[i]] = 0;
     }
 
     return 1;
 }
 
-void MazeGen_ToCharGrid(const int *grid, int rows, int cols, char *out)
+/* ------------------------------------------------------------------
+ * Terminal version. Only compiled with -DMAZE_CLI (see "make cli"),
+ * so the game and the dataset program don't get a second main().
+ * ------------------------------------------------------------------ */
+#ifdef MAZE_CLI
+
+static void print_maze(const int *grid, int rows, int cols)
 {
-    for (int r = 0; r < rows; r++)
-    {
-        for (int c = 0; c < cols; c++)
-        {
-            int idx = r * cols + c;
-
-            if (r == 1 && c == 1)
-                out[idx] = 'S';
-            else if (r == rows - 2 && c == cols - 2)
-                out[idx] = 'E';
-            else
-                out[idx] = grid[idx] ? '#' : ' ';
-        }
-    }
-}
-
-void MazeGen_PrintCharGrid(const char *charGrid, int rows, int cols)
-{
-    for (int r = 0; r < rows; r++)
-    {
-        for (int c = 0; c < cols; c++)
-            putchar(charGrid[r * cols + c]);
-        putchar('\n');
-    }
-}
-
-#ifdef MAZE_STANDALONE
-
-static void showMenu(void)
-{
-    printf("\n");
-    printf("+----------------------------------+\n");
-    printf("|     Maze Generator CLI Tool       |\n");
-    printf("+----------------------------------+\n");
-    printf("|  1) Easy   (15 x 15)             |\n");
-    printf("|  2) Medium (21 x 21)             |\n");
-    printf("|  3) Hard   (31 x 31)             |\n");
-    printf("|  0) Exit                         |\n");
-    printf("+----------------------------------+\n");
-}
-
-static int getDifficulty(void)
-{
-    char buf[64];
-    int choice;
-
-    for (;;)
-    {
-        showMenu();
-        printf("Select difficulty [0-3]: ");
-        fflush(stdout);
-
-        if (!fgets(buf, sizeof(buf), stdin))
-            return 0;
-
-        if (sscanf(buf, "%d", &choice) == 1 && choice >= 0 && choice <= 3)
-            return choice;
-
-        printf("Invalid input. Please enter 0, 1, 2, or 3.\n");
-    }
-}
-
-static void getMazeSize(int choice, MazeDifficultyParams *params)
-{
-    MazeDifficulty diff;
-    switch (choice)
-    {
-    case 1:  diff = MAZE_DIFFICULTY_EASY;   break;
-    case 3:  diff = MAZE_DIFFICULTY_HARD;   break;
-    default: diff = MAZE_DIFFICULTY_MEDIUM; break;
-    }
-    MazeGen_GetParams(diff, params);
-}
-
-static int *initializeMaze(int rows, int cols)
-{
-    int *grid = (int *)calloc((size_t)(rows * cols), sizeof(int));
-    if (!grid)
-    {
-        fprintf(stderr, "Error: failed to allocate %dx%d grid.\n", rows, cols);
-    }
-    return grid;
-}
-
-static int generateMaze(int *grid, const MazeDifficultyParams *params)
-{
-    unsigned int seed = (unsigned int)time(NULL);
-    printf("\nGenerating %dx%d maze (seed=%u, loops=%d%%) ...\n",
-           params->rows, params->cols, seed, params->loop_percent);
-    return MazeGen_Generate(grid, params->rows, params->cols,
-                            params->loop_percent, seed);
-}
-
-static void setStartAndEnd(char *charGrid, int rows, int cols)
-{
-    charGrid[1 * cols + 1] = 'S';
-    charGrid[(rows - 2) * cols + (cols - 2)] = 'E';
-}
-
-static void printMaze(const int *grid, int rows, int cols)
-{
-    char *charGrid = (char *)malloc((size_t)(rows * cols));
-    if (!charGrid)
-    {
-        fprintf(stderr, "Error: allocation failed for char grid.\n");
-        return;
-    }
-
-    MazeGen_ToCharGrid(grid, rows, cols, charGrid);
-    setStartAndEnd(charGrid, rows, cols);
-
+    int r, c;
     printf("\n=== Maze (%d x %d) ===\n\n", rows, cols);
-    MazeGen_PrintCharGrid(charGrid, rows, cols);
+    for (r = 0; r < rows; r++)
+    {
+        for (c = 0; c < cols; c++)
+        {
+            if (r == 1 && c == 1)
+                printf("S");
+            else if (r == rows - 2 && c == cols - 2)
+                printf("E");
+            else if (grid[r * cols + c] == 1)
+                printf("#");
+            else
+                printf(" ");
+        }
+        printf("\n");
+    }
     printf("\n");
-
-    free(charGrid);
 }
 
 int main(void)
 {
-    int running = 1;
+    int grid[MAX_CELLS];
+    char line[64];
+    int choice;
 
-    while (running)
+    while (1)
     {
-        int choice = getDifficulty();
+        printf("\n");
+        printf("+----------------------------------+\n");
+        printf("|     Maze Generator CLI Tool      |\n");
+        printf("+----------------------------------+\n");
+        printf("|  1) Easy   (15 x 15)             |\n");
+        printf("|  2) Medium (21 x 21)             |\n");
+        printf("|  3) Hard   (31 x 31)             |\n");
+        printf("|  0) Exit                         |\n");
+        printf("+----------------------------------+\n");
+        printf("Select difficulty [0-3]: ");
+
+        if (fgets(line, sizeof(line), stdin) == NULL)
+            break;
+        if (sscanf(line, "%d", &choice) != 1 || choice < 0 || choice > 3)
+        {
+            printf("Invalid input. Please enter 0, 1, 2, or 3.\n");
+            continue;
+        }
         if (choice == 0)
+            break;
+
+        Level level;
+        if (choice == 1)
+            level = get_level(EASY);
+        else if (choice == 3)
+            level = get_level(HARD);
+        else
+            level = get_level(MEDIUM);
+
+        unsigned int seed = (unsigned int)time(NULL);
+        printf("\nGenerating %dx%d maze (seed=%u, loops=%d%%) ...\n",
+               level.rows, level.cols, seed, level.loop_percent);
+
+        if (generate_maze(grid, level.rows, level.cols, level.loop_percent, seed) == 0)
         {
-            running = 0;
+            printf("Error: maze generation failed.\n");
             continue;
         }
-
-        MazeDifficultyParams params;
-        getMazeSize(choice, &params);
-
-        int *grid = initializeMaze(params.rows, params.cols);
-        if (!grid) return 1;
-
-        if (!generateMaze(grid, &params))
-        {
-            fprintf(stderr, "Error: maze generation failed.\n");
-            free(grid);
-            continue;
-        }
-
-        printMaze(grid, params.rows, params.cols);
-
-        free(grid);
+        print_maze(grid, level.rows, level.cols);
     }
 
     printf("Goodbye!\n");

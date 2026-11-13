@@ -1,57 +1,56 @@
-CC ?= cc
-CXX ?= c++
-PYTHON ?= python3
-CFLAGS ?= -O2 -Wall -Wextra -Werror -std=c11
-CXXFLAGS ?= -O2 -Wall -Wextra -Werror -std=c++17
-CPPFLAGS ?=
-LDLIBS ?= -lm
-HEADERS = $(wildcard include/*.h) Makefile
+# Run "make help"-style targets from the project folder:
+#   make game | make cli | make menu | make test | make train
 
-# Homebrew installs Raylib here; other platforms can override these variables.
+CC = cc
+CXX = c++
+PYTHON = python3
+CFLAGS = -O2 -Wall -Wextra -Werror -std=c11 -Iinclude
+CXXFLAGS = -O2 -Wall -Wextra -Werror -std=c++17 -Iinclude
+
+# Raylib from Homebrew on Mac. On Windows (MSYS2) run:
+#   make game RAYLIB_LIBS='-lraylib -lopengl32 -lgdi32 -lwinmm'
 ifneq ($(wildcard /opt/homebrew/include/raylib.h),)
-RAYLIB_CFLAGS ?= -I/opt/homebrew/include
-RAYLIB_LIBS ?= -L/opt/homebrew/lib -lraylib
+RAYLIB_CFLAGS = -I/opt/homebrew/include
+RAYLIB_LIBS = -L/opt/homebrew/lib -lraylib
 else
-RAYLIB_CFLAGS ?=
-RAYLIB_LIBS ?= -lraylib
+RAYLIB_CFLAGS =
+RAYLIB_LIBS = -lraylib
 endif
 
-.PHONY: all test dataset train check-model game cli menu
+CORE = src/maze_core.c src/maze_generator.c include/maze.h
+
+.PHONY: all game cli menu test dataset train check-model
 .DELETE_ON_ERROR:
+
 all: build/maze_dataset
 
 build:
 	mkdir -p build
 
-build/maze_dataset: src/maze_dataset.c src/maze_features.c src/maze_sim.c src/maze_generator.c src/maze_graph.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
+build/maze_dataset: src/maze_dataset.c $(CORE) | build
+	$(CC) $(CFLAGS) src/maze_dataset.c src/maze_core.c src/maze_generator.c -lm -o $@
 
-build/maze_features_test: tests/maze_features_test.c src/maze_features.c src/maze_graph.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
+build/maze_model_score: src/maze_model_score.c model/maze_model.h | build
+	$(CC) $(CFLAGS) -Imodel src/maze_model_score.c -o $@
 
-build/maze_sim_test: tests/maze_sim_test.c src/maze_sim.c src/maze_graph.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
+build/test_all: tests/test_all.c $(CORE) | build
+	$(CC) $(CFLAGS) tests/test_all.c src/maze_core.c src/maze_generator.c -lm -o $@
 
-build/maze_generator_test: tests/maze_generator_test.c src/maze_generator.c src/maze_graph.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) $(filter %.c,$^) $(LDLIBS) -o $@
+build/maze_cli: $(CORE) | build
+	$(CC) $(CFLAGS) -DMAZE_CLI src/maze_generator.c src/maze_core.c -lm -o $@
 
-build/maze_model_score: src/maze_model_score.c model/maze_model.h Makefile | build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Imodel src/maze_model_score.c -o $@
+build/maze_core.o: src/maze_core.c include/maze.h | build
+	$(CC) $(CFLAGS) -c src/maze_core.c -o $@
 
-build/maze_graph.o: src/maze_graph.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) -c src/maze_graph.c -o $@
+build/maze_generator.o: src/maze_generator.c include/maze.h | build
+	$(CC) $(CFLAGS) -c src/maze_generator.c -o $@
 
-build/maze_generator.o: src/maze_generator.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) -c src/maze_generator.c -o $@
+# the game is C++ and links the C files compiled above
+build/maze_game: src/maze_game.cpp build/maze_core.o build/maze_generator.o include/maze.h | build
+	$(CXX) $(CXXFLAGS) $(RAYLIB_CFLAGS) src/maze_game.cpp build/maze_core.o build/maze_generator.o $(RAYLIB_LIBS) -lm -o $@
 
-build/maze_game: src/maze_game.cpp build/maze_graph.o build/maze_generator.o $(HEADERS) | build
-	$(CXX) $(CPPFLAGS) -Iinclude $(RAYLIB_CFLAGS) $(CXXFLAGS) src/maze_game.cpp build/maze_graph.o build/maze_generator.o $(RAYLIB_LIBS) -o $@
-
-build/maze_cli: src/maze_generator.c $(HEADERS) | build
-	$(CC) $(CPPFLAGS) -Iinclude $(CFLAGS) -DMAZE_STANDALONE src/maze_generator.c -o $@
-
-build/menu: src/menu.c Makefile | build
-	$(CC) $(CPPFLAGS) $(RAYLIB_CFLAGS) $(CFLAGS) src/menu.c $(RAYLIB_LIBS) -lsqlite3 -o $@
+build/menu: src/menu.c | build
+	$(CC) $(CFLAGS) $(RAYLIB_CFLAGS) src/menu.c $(RAYLIB_LIBS) -lsqlite3 -o $@
 
 game: build/maze_game
 cli: build/maze_cli
@@ -69,9 +68,7 @@ train: dataset
 check-model: build/maze_model_score
 	$(PYTHON) tools/verify_model.py data/maze_data.csv model/maze_model.json ./build/maze_model_score
 
-test: build/maze_features_test build/maze_sim_test build/maze_generator_test build/maze_dataset
-	./build/maze_features_test
-	./build/maze_sim_test
-	./build/maze_generator_test
+test: build/test_all build/maze_dataset
+	./build/test_all
 	CC="$(CC)" $(PYTHON) -m unittest discover -s tests -p '*_test.py'
 	$(MAKE) check-model
